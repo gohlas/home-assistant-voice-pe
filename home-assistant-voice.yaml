@@ -524,8 +524,11 @@ binary_sensor:
         then:
           - light.turn_on:
               brightness: 100%
+              red: 100%
+              green: 0%
+              blue: 0%
               id: led_internal
-              effect: "Factory Reset Coming Up"
+              effect: "Fast Pulse"
           - script.execute:
               id: play_sound
               priority: true
