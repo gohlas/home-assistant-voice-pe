@@ -28,14 +28,15 @@ substitutions:
   factory_reset_initiated_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/factory_reset_initiated.mp3
   factory_reset_cancelled_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/factory_reset_cancelled.mp3
   factory_reset_confirmed_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/factory_reset_confirmed.mp3
+  easter_egg_tick_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/easter_egg_tick.mp3
+  easter_egg_tada_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/easter_egg_tada.mp3
   error_cloud_expired_sound_file: https://github.com/esphome/home-assistant-voice-pe/raw/dev/sounds/error_cloud_expired.mp3
-
 
 esphome:
   name: home-assistant-voice
   friendly_name: Home Assistant Voice
   name_add_mac_suffix: true
-  min_version: 2026.1.0
+  min_version: 2026.6.0
   on_boot:
     - priority: 375
       then:
@@ -106,11 +107,10 @@ network:
   enable_ipv6: true
 
 logger:
-  level: debug
-  initial_level: debug
+  level: DEBUG
   logs:
     sensor: WARN  # avoids logging debug sensor updates
-#  hardware_uart: uart0  #Uncomment to see serial logs via USB connection. Comment out after debufgging - this line introduces noise on speaker...
+#  hardware_uart: uart0  #Uncomment to see serial logs via USB connection. Comment out after debugging - this line introduces noise on speaker...
 
 api:
   id: api_id
@@ -141,7 +141,6 @@ api:
             tzset();
             id(saved_time_zone) = posix_time_zone;
             id(publish_current_time).execute();
-
   on_client_connected:
     - script.execute: control_leds
   on_client_disconnected:
@@ -221,7 +220,6 @@ time:
           - script.execute: check_alarm
     on_time_sync:
       - script.execute: publish_current_time
-          
 
 switch:
   # Hardware speaker mute
@@ -238,18 +236,19 @@ switch:
   # stateless momentary mic mute switch
   - platform: gpio
     internal: true
-    pin: 
+    pin:
       number: GPIO4 # D3
       inverted: true
     id: mute_toggle
     on_turn_on:
       - delay: 300ms
       - switch.turn_off: mute_toggle
-  # stateful user facing mic mute switch
+  # stateful user facing mic mute switch (mirrors the ReSpeaker board's own hardware mute state)
   - platform: template
-    id: mic_mute_switch
-    name: Mic mute
-    icon: mdi:microphone-off
+    id: master_mute_switch
+    name: Mute
+    icon: "mdi:microphone-off"
+    entity_category: config
     optimistic: false
     lambda: |-
       if (id(mute_state).state) {
@@ -268,6 +267,7 @@ switch:
                 id: play_sound
                 priority: false
                 sound_file: "mute_switch_on_sound"
+      - script.execute: control_leds
     on_turn_off:
       - if:
           condition:
@@ -279,6 +279,7 @@ switch:
                 id: play_sound
                 priority: false
                 sound_file: "mute_switch_off_sound"
+      - script.execute: control_leds
     turn_on_action:
       - if:
           condition:
@@ -315,6 +316,15 @@ switch:
     entity_category: config
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
+  # Disable physical controls switch
+  - platform: template
+    id: disable_buttons
+    name: Disable physical controls
+    icon: "mdi:button-pointer"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    disabled_by_default: true
   # Internal switch to track when a timer is ringing on the device.
   - platform: template
     id: timer_ringing
@@ -369,17 +379,24 @@ switch:
       - script.execute: control_leds
 
 binary_sensor:
-  # User Button. Used for many things (See on_multi_click)
+  # Center Button. Used for many things (See on_multi_click)
   - platform: gpio
-    id: user_button
+    id: center_button
     pin:
       number: GPIO3 # D2
       inverted: true
-    name: "User button"
     on_press:
-      - script.execute: control_leds
+      - if:
+          condition:
+            switch.is_off: disable_buttons
+          then:
+            - script.execute: control_leds
     on_release:
-      - script.execute: control_leds
+      - if:
+          condition:
+            switch.is_off: disable_buttons
+          then:
+            - script.execute: control_leds
       # If a factory reset is requested, factory reset on release
       - if:
           condition:
@@ -400,7 +417,7 @@ binary_sensor:
         then:
           - if:
               condition:
-                lambda: return !id(init_in_progress);
+                lambda: return !id(init_in_progress) && !id(disable_buttons).state;
               then:
                 - if:
                     condition:
@@ -434,9 +451,8 @@ binary_sensor:
                                         - if:
                                             condition:
                                               and:
-                                                - switch.is_off: mic_mute_switch
-                                                - not:
-                                                    voice_assistant.is_running
+                                                - switch.is_off: master_mute_switch
+                                                - not: voice_assistant.is_running
                                             then:
                                               - if:
                                                   condition:
@@ -458,7 +474,7 @@ binary_sensor:
         then:
           - if:
               condition:
-                lambda: return !id(init_in_progress);
+                lambda: return !id(init_in_progress) && !id(disable_buttons).state;
               then:
                 - if:
                     condition:
@@ -483,7 +499,7 @@ binary_sensor:
         then:
           - if:
               condition:
-                lambda: return !id(init_in_progress);
+                lambda: return !id(init_in_progress) && !id(disable_buttons).state;
               then:
                 - if:
                     condition:
@@ -503,7 +519,7 @@ binary_sensor:
         then:
           - if:
               condition:
-                lambda: return !id(init_in_progress);
+                lambda: return !id(init_in_progress) && !id(disable_buttons).state;
               then:
                 - if:
                     condition:
@@ -517,6 +533,47 @@ binary_sensor:
                 - event.trigger:
                     id: button_press_event
                     event_type: "long_press"
+      # Very important do not remove. Trust me :D
+      - timing:
+          # H ....
+          - ON for at most 0.2s
+          - OFF for 0s to 2s
+          - ON for at most 0.2s
+          - OFF for 0s to 2s
+          - ON for at most 0.2s
+          - OFF for 0s to 2s
+          - ON for at most 0.2s
+          - OFF for 0.5s to 2s
+          # A ._
+          - ON for at most 0.2s
+          - OFF for 0s to 2s
+          - ON for 0.2s to 2s
+        then:
+          - if:
+              condition:
+                lambda: return !id(init_in_progress);
+              then:
+                - light.turn_on:
+                    brightness: 100%
+                    id: led_internal
+                    effect: "Tick"
+                - script.execute:
+                    id: play_sound
+                    priority: true
+                    sound_file: "easter_egg_tick_sound"
+                - delay: 4s
+                - light.turn_off: led_internal
+                - script.execute:
+                    id: play_sound
+                    priority: true
+                    sound_file: "easter_egg_tada_sound"
+                - light.turn_on:
+                    brightness: 100%
+                    id: led_internal
+                    effect: "Rainbow"
+                - event.trigger:
+                    id: button_press_event
+                    event_type: "easter_egg_press"
       # Factory Reset Warning
       #  . Audible and Visible warning.
       - timing:
@@ -534,7 +591,7 @@ binary_sensor:
               priority: true
               sound_file: "factory_reset_initiated_sound"
           - wait_until:
-              binary_sensor.is_off: user_button
+              binary_sensor.is_off: center_button
           - if:
               condition:
                 lambda: return !id(factory_reset_requested);
@@ -584,10 +641,10 @@ light:
 
             auto values = id(led_internal)->current_values;
             Color color(values.get_red() * 255, values.get_green() * 255, values.get_blue() * 255);
-            it[0].set_rgb(color.red * fraction, 
-                             color.green * fraction, 
+            it[0].set_rgb(color.red * fraction,
+                             color.green * fraction,
                              color.blue * fraction);
-            
+
             fraction += (step * (increasing ? 1 : -1));
             if (fraction > 1.0) {
               fraction = 1.0;
@@ -607,10 +664,10 @@ light:
 
             auto values = id(led_internal)->current_values;
             Color color(values.get_red() * 255, values.get_green() * 255, values.get_blue() * 255);
-            it[0].set_rgb(color.red * fraction, 
-                             color.green * fraction, 
+            it[0].set_rgb(color.red * fraction,
+                             color.green * fraction,
                              color.blue * fraction);
-            
+
             fraction += (step * (increasing ? 1 : -1));
             if (fraction > 1.0) {
               fraction = 1.0;
@@ -618,6 +675,37 @@ light:
             } else if (fraction < 0.0) {
               fraction = 0.0;
               increasing = !increasing;
+            }
+
+      # Fast on/off blink, used during the easter-egg Morse code countdown
+      - addressable_lambda:
+          name: "Tick"
+          update_interval: 200ms
+          lambda: |-
+            static bool led_on = false;
+            if (initial_run) {
+              led_on = false;
+            }
+            auto values = id(led_internal)->current_values;
+            Color color(values.get_red() * 255, values.get_green() * 255, values.get_blue() * 255);
+            led_on = !led_on;
+            it[0] = led_on ? color : Color::BLACK;
+
+      # Hue rotation, used as the easter-egg celebration effect
+      - addressable_lambda:
+          name: "Rainbow"
+          update_interval: 30ms
+          lambda: |-
+            static float hue = 0.0f;
+            if (initial_run) {
+              hue = 0.0f;
+            }
+            float red, green, blue;
+            hsv_to_rgb(hue, 1.0f, 1.0f, red, green, blue);
+            it[0].set_rgb(red * 255, green * 255, blue * 255);
+            hue += 3.0f;
+            if (hue >= 360.0f) {
+              hue -= 360.0f;
             }
   # User facing LED.
   # Exposed to be used by the user.
@@ -651,10 +739,10 @@ light:
 
             auto values = id(led_respeaker_onboard)->current_values;
             Color color(values.get_red() * 255, values.get_green() * 255, values.get_blue() * 255);
-            it[0].set_rgb(color.red * fraction, 
-                             color.green * fraction, 
+            it[0].set_rgb(color.red * fraction,
+                             color.green * fraction,
                              color.blue * fraction);
-            
+
             fraction += (step * (increasing ? 1 : -1));
             if (fraction > 1.0) {
               fraction = 1.0;
@@ -674,10 +762,10 @@ light:
 
             auto values = id(led_respeaker_onboard)->current_values;
             Color color(values.get_red() * 255, values.get_green() * 255, values.get_blue() * 255);
-            it[0].set_rgb(color.red * fraction, 
-                             color.green * fraction, 
+            it[0].set_rgb(color.red * fraction,
+                             color.green * fraction,
                              color.blue * fraction);
-            
+
             fraction += (step * (increasing ? 1 : -1));
             if (fraction > 1.0) {
               fraction = 1.0;
@@ -724,6 +812,7 @@ event:
       - double_press
       - triple_press
       - long_press
+      - easter_egg_press
 
 script:
   # Master script controlling the LEDs, based on different conditions : initialization in progress, wifi and api connected and voice assistant phase.
@@ -742,7 +831,7 @@ script:
             id(control_leds_init_state).execute();
           } else if (!id(wifi_id).is_connected() || !id(api_id).is_connected()){
             id(control_leds_no_ha_connection_state).execute();
-          } else if (id(user_button).state) {
+          } else if (id(center_button).state) {
             id(control_leds_center_button_touched).execute();
           } else if (id(timer_ringing).state) {
             id(control_leds_timer_ringing).execute();
@@ -760,6 +849,8 @@ script:
             id(control_leds_voice_assistant_not_ready_phase).execute();
           } else if (id(is_timer_active)) {
             id(control_leds_timer_ticking).execute();
+          } else if (id(master_mute_switch).state || id(external_media_player).volume == 0.0f || id(external_media_player).is_muted()) {
+            id(control_leds_muted_or_silent).execute();
           } else if (id(alarm_on).state && !id(led_respeaker_onboard).remote_values.is_on()) {
             id(control_leds_alarm_active).execute();
           } else if (id(voice_assistant_phase) == ${voice_assist_idle_phase_id}) {
@@ -895,6 +986,18 @@ script:
           id: led_internal
           effect: "Slow Pulse"
 
+  # Script executed when the media player is muted or silent
+  # Fast red pulse
+  - id: control_leds_muted_or_silent
+    then:
+      - light.turn_on:
+          brightness: !lambda return max( id(led_respeaker_onboard).current_values.get_brightness() , 0.2f );
+          red: 1
+          green: 0
+          blue: 0
+          id: led_internal
+          effect: "Fast Pulse"
+
   # Script executed when the center button is touched
   # The LED turns on blue
   - id: control_leds_center_button_touched
@@ -930,7 +1033,7 @@ script:
           blue: 0.3
           id: led_internal
           effect: "Slow Pulse"
-  
+
   # Script executed when the alarm is active
   # The LED turns on dim green
   - id: control_leds_alarm_active
@@ -942,7 +1045,6 @@ script:
           blue: 0
           id: led_internal
           effect: "None"
-
 
   # Script executed when the timer is ringing, to playback sounds.
   - id: ring_timer
@@ -960,8 +1062,10 @@ script:
           id: external_media_player
           announcement: true
       # Turn on the repeat mode and pause for 500 ms between playlist items/repeats
-      - lambda: |-
-            id(external_media_player)->set_playlist_delay_ms(1, 500);
+      - speaker_source.set_playlist_delay:
+          id: external_media_player
+          pipeline: announcement
+          delay: 500ms
 
   # Script execute when the timer is done ringing, to disable repeat mode.
   - id: disable_repeat
@@ -970,14 +1074,15 @@ script:
       - media_player.repeat_off:
           id: external_media_player
           announcement: true
-      - lambda: |-
-            id(external_media_player)->set_playlist_delay_ms(1, 0);
+      - speaker_source.set_playlist_delay:
+          id: external_media_player
+          pipeline: announcement
+          delay: 0ms
 
   # Script executed when we want to play sounds on the device.
   - id: play_sound
     parameters:
       priority: bool
-      # sound_file: "audio::AudioFile*"
       sound_file: string
     then:
       - if:
@@ -991,7 +1096,7 @@ script:
           if ( (id(external_media_player).state != media_player::MediaPlayerState::MEDIA_PLAYER_STATE_ANNOUNCING ) || priority) {
             id(external_media_player)
               ->make_call()
-              .set_media_url("file://" + sound_file)
+              .set_media_url("audio-file://" + sound_file)
               .set_announcement(true)
               .perform();
           }
@@ -1000,11 +1105,11 @@ script:
   - id: fetch_first_active_timer
     then:
       - lambda: |
-          const auto timers = id(va).get_timers();
-          auto output_timer = timers.begin()->second;
-          for (auto &iterable_timer : timers) {
-            if (iterable_timer.second.is_active && iterable_timer.second.seconds_left <= output_timer.seconds_left) {
-              output_timer = iterable_timer.second;
+          const auto &timers = id(va).get_timers();
+          auto output_timer = *timers.begin();
+          for (const auto &timer : timers) {
+            if (timer.is_active && timer.seconds_left <= output_timer.seconds_left) {
+              output_timer = timer;
             }
           }
           id(first_active_timer) = output_timer;
@@ -1013,13 +1118,11 @@ script:
   - id: check_if_timers_active
     then:
       - lambda: |
-          const auto timers = id(va).get_timers();
+          const auto &timers = id(va).get_timers();
           bool output = false;
-          if (timers.size() > 0) {
-            for (auto &iterable_timer : timers) {
-              if(iterable_timer.second.is_active) {
-                output = true;
-              }
+          for (const auto &timer : timers) {
+            if (timer.is_active) {
+              output = true;
             }
           }
           id(is_timer_active) = output;
@@ -1034,6 +1137,7 @@ script:
           condition:
             media_player.is_announcing:
               id: external_media_player
+          timeout: 5s
       - delay: 1s
       # Enable stop wake word
       - if:
@@ -1076,7 +1180,7 @@ script:
                 } else if (action == "Sound and event") {
                   id(timer_ringing).turn_on();
                   id(send_alarm_event).execute();
-                } 
+                }
               }
             } else {
               ESP_LOGW("alarm", "Incorrect alarm time setting");
@@ -1111,24 +1215,24 @@ script:
 
 i2s_audio:
   - id: i2s_output
-    i2s_lrclk_pin: 
+    i2s_lrclk_pin:
       number: GPIO7
       allow_other_uses: true
-    i2s_bclk_pin:  
+    i2s_bclk_pin:
       number: GPIO8
       allow_other_uses: true
-    i2s_mclk_pin:  
+    i2s_mclk_pin:
       number: GPIO9
       allow_other_uses: true
 
   - id: i2s_input
-    i2s_lrclk_pin:  
+    i2s_lrclk_pin:
       number: GPIO7
       allow_other_uses: true
-    i2s_bclk_pin:  
+    i2s_bclk_pin:
       number: GPIO8
       allow_other_uses: true
-    i2s_mclk_pin:  
+    i2s_mclk_pin:
       number: GPIO9
       allow_other_uses: true
 
@@ -1143,7 +1247,7 @@ microphone:
     i2s_mode: secondary
     i2s_audio_id: i2s_input
     channel: stereo
-      
+
 speaker:
   # Hardware speaker output
   - platform: i2s_audio
@@ -1185,42 +1289,50 @@ speaker:
 
 sendspin:
   id: sendspin_hub
-  task_stack_in_psram: true
-  kalman_process_error: 0.01
+  task_stack_in_psram: false
+
+audio_file:
+  - id: center_button_press_sound
+    file: ${center_button_press_sound_file}
+  - id: center_button_double_press_sound
+    file: ${center_button_double_press_sound_file}
+  - id: center_button_triple_press_sound
+    file: ${center_button_triple_press_sound_file}
+  - id: center_button_long_press_sound
+    file: ${center_button_long_press_sound_file}
+  - id: factory_reset_initiated_sound
+    file: ${factory_reset_initiated_sound_file}
+  - id: factory_reset_cancelled_sound
+    file: ${factory_reset_cancelled_sound_file}
+  - id: factory_reset_confirmed_sound
+    file: ${factory_reset_confirmed_sound_file}
+  - id: mute_switch_on_sound
+    file: ${mute_switch_on_sound_file}
+  - id: mute_switch_off_sound
+    file: ${mute_switch_off_sound_file}
+  - id: timer_finished_sound
+    file: ${timer_finished_sound_file}
+  - id: wake_word_triggered_sound
+    file: ${wake_word_triggered_sound_file}
+  - id: easter_egg_tick_sound
+    file: ${easter_egg_tick_sound_file}
+  - id: easter_egg_tada_sound
+    file: ${easter_egg_tada_sound_file}
+  - id: error_cloud_expired
+    file: ${error_cloud_expired_sound_file}
 
 media_source:
-  - platform: sendspin
-    id: sendspin_source
-  - platform: http_request
-    id: http_source
+  - platform: audio_file
+    id: audio_file_announcement_source
+  - platform: audio_http
+    id: http_announcement_source
+    buffer_size: 250000
+  - platform: audio_http
+    id: http_media_source
     buffer_size: 500000
-  - platform: file
-    id: file_source
-    files:
-      - id: center_button_press_sound
-        file: ${center_button_press_sound_file}
-      - id: center_button_double_press_sound
-        file: ${center_button_double_press_sound_file}
-      - id: center_button_triple_press_sound
-        file: ${center_button_triple_press_sound_file}
-      - id: center_button_long_press_sound
-        file: ${center_button_long_press_sound_file}
-      - id: factory_reset_initiated_sound
-        file: ${factory_reset_initiated_sound_file}
-      - id: factory_reset_cancelled_sound
-        file: ${factory_reset_cancelled_sound_file}
-      - id: factory_reset_confirmed_sound
-        file: ${factory_reset_confirmed_sound_file}
-      - id: mute_switch_on_sound
-        file: ${mute_switch_on_sound_file}
-      - id: mute_switch_off_sound
-        file: ${mute_switch_off_sound_file}
-      - id: timer_finished_sound
-        file: ${timer_finished_sound_file}
-      - id: wake_word_triggered_sound
-        file: ${wake_word_triggered_sound_file}
-      - id: error_cloud_expired
-        file: ${error_cloud_expired_sound_file}
+  - platform: sendspin
+    id: sendspin_media_source
+    fixed_delay: 480 microseconds  # The AIC3204 DAC used, as configured, delays audio by 480 microseconds
 
 media_player:
   - platform: sendspin
@@ -1228,23 +1340,31 @@ media_player:
   - platform: speaker_source
     id: external_media_player
     name: Media Player
-    announcement_speaker: announcement_resampling_speaker
-    media_speaker: media_resampling_speaker
     announcement_pipeline:
       format: FLAC     # FLAC is the least processor intensive codec
       num_channels: 1  # Stereo audio is unnecessary for announcements
       sample_rate: 48000
+      speaker: announcement_resampling_speaker
+      sources:
+        - audio_file_announcement_source
+        - http_announcement_source
     media_pipeline:
       format: FLAC     # FLAC is the least processor intensive codec
       num_channels: 2
       sample_rate: 48000
+      speaker: media_resampling_speaker
+      sources:
+        - http_media_source
+        - sendspin_media_source
     volume_increment: 0.05
     volume_min: 0.4
     volume_max: 0.85
-    sources:
-      - file_source
-      - http_source
-      - sendspin_source
+    on_mute:
+      - script.execute: control_leds
+    on_unmute:
+      - script.execute: control_leds
+    on_volume:
+      - script.execute: control_leds
     on_announcement:
       - mixer_speaker.apply_ducking:
           id: media_mixing_input
@@ -1323,46 +1443,9 @@ external_components:
       type: git
       url: https://github.com/formatBCE/Respeaker-Lite-ESPHome-integration
       ref: main
-    components: 
+    components:
       - respeaker_lite
     refresh: 0s
-  - source:
-      # https://github.com/esphome/esphome/pull/12253
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: 7f34908569650e5a8b8c83e6bf89fea561218880
-    components: [mixer]
-  - source:
-      # https://github.com/esphome/esphome/pull/12254
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: 6006b896a691ad38d8045ac67564c168973d1a1d
-    components: [resampler]
-  - source:
-      # https://github.com/esphome/esphome/pull/12256
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: 9148832ea4e54907bad71a24d4ced1ce6c862433
-    components: [audio]
-  - source:
-      # https://github.com/esphome/esphome/pull/12258
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: bff22983a390352360796f8e1363127e0cd1f898
-    components: [media_player]
-  - source:
-      # https://github.com/esphome/esphome/pull/12284
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: a6c0a861a014e64c67d46115eba8e5370777b80a
-    components: [mdns, sendspin]
-  - source:
-      # https://github.com/esphome/esphome/pull/12429
-      type: git
-      url: https://github.com/esphome/esphome
-      ref: 928204066ce0082404573ea1c6a0b58aeebbd7c6
-    refresh: 0s
-    components: [file, http_request, media_source, speaker_source]
 
 audio_dac:
   - platform: aic3204
@@ -1378,7 +1461,6 @@ micro_wake_word:
   stop_after_detection: false
   models:
     - model: https://github.com/kahrendt/microWakeWord/releases/download/okay_nabu_20241226.3/okay_nabu.json
-      # probability_cutoff: 0.8
       id: okay_nabu
     - model: https://raw.githubusercontent.com/formatBCE/Respeaker-Lite-ESPHome-integration/refs/heads/main/microwakeword/models/v2/kenobi.json
       id: kenobi
@@ -1395,7 +1477,7 @@ micro_wake_word:
     # If the wake word is detected when the device is muted (Possible with the software mute switch): Do nothing
     - if:
         condition:
-          switch.is_off: mic_mute_switch
+          switch.is_off: master_mute_switch
         then:
           # If a timer is ringing: Stop it, do not start the voice assistant (We can stop timer from voice!)
           - if:
@@ -1437,6 +1519,7 @@ micro_wake_word:
 select:
   - platform: template
     name: "Wake word sensitivity"
+    id: wake_word_sensitivity
     optimistic: true
     initial_option: Slightly sensitive
     restore_value: true
@@ -1498,9 +1581,9 @@ voice_assistant:
     - if:
         condition:
           - lambda: return id(init_in_progress);
-          - switch.is_on: mic_mute_switch
+          - switch.is_on: master_mute_switch
         then:
-          - switch.turn_off: mic_mute_switch
+          - switch.turn_off: master_mute_switch
     - lambda: id(init_in_progress) = false;
     - micro_wake_word.start:
     - lambda: id(voice_assistant_phase) = ${voice_assist_idle_phase_id};
@@ -1573,7 +1656,7 @@ voice_assistant:
     - script.execute:
         id: send_stt_text_event
         stt_text: !lambda 'return x;'
-    
+
   # When the voice assistant ends ...
   on_end:
     - wait_until:
@@ -1615,10 +1698,10 @@ voice_assistant:
         id(next_timer_name).publish_state(id(first_active_timer).name);
   on_timer_tick:
     - script.execute: control_leds
-    - lambda: | 
+    - lambda: |
         int seconds_left = id(first_active_timer).seconds_left;
         if (std::abs(seconds_left) % 5 == 0) {
-          id(next_timer).publish_state(seconds_left); 
+          id(next_timer).publish_state(seconds_left);
         }
 
 button:
