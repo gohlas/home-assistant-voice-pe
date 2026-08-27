@@ -1172,7 +1172,7 @@ script:
               // Trigger action if current time matches alarm time
               auto time_now = id(homeassistant_time).now();
               if (time_now.hour == alarm_hour && time_now.minute == alarm_minute) {
-                auto action = id(alarm_action).state;
+                auto action = id(alarm_action).current_option();
                 if (action == "Play sound") {
                   id(timer_ringing).turn_on();
                 } else if (action == "Send event") {
